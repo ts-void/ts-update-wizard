@@ -44,3 +44,7 @@ go build -o void-package-update-helper main.go
 | `↓` / `j` | Move down |
 | `Space` / `Enter` | Toggle step completed |
 | `q` / `Ctrl+C` | Quit wizard |
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
