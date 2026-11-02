@@ -70,8 +70,6 @@ func parseTemplateVersion(cfg Config, pkgName string) string {
 
 	file, err := os.Open(templatePath)
 	if err != nil {
-		// Debug-Ausgabe, damit du siehst, wo das Template gesucht wird:
-		// fmt.Printf("Debug: Could not open template at %s\n", templatePath)
 		return "unknown"
 	}
 	defer file.Close()
