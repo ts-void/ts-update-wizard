@@ -29,6 +29,7 @@ type model struct {
 	pkgName        string
 	config         Config
 	currentVersion string
+	updateStatus   string
 	steps          []Step
 	cursor         int
 	outputLog      string
@@ -39,6 +40,7 @@ type model struct {
 
 var (
 	titleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	versionStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
 	cursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
 	doneStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Strikethrough(true)
 	normalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -49,6 +51,10 @@ var (
 )
 
 type outputLineMsg string
+type updateCheckFinishedMsg struct {
+	output string
+	err    error
+}
 type execFinishedMsg struct {
 	err error
 }
@@ -91,6 +97,11 @@ func parseTemplateVersion(cfg Config, pkgName string) string {
 		}
 	}
 
+	// Check for scanner errors to satisfy linters
+	if err := scanner.Err(); err != nil {
+		return "unknown"
+	}
+
 	return "unknown"
 }
 
@@ -107,9 +118,9 @@ func initialModel(pkgName string) model {
 	steps := []Step{
 		{Title: "Clean local branches", Command: "git branch | grep -v \"^\\*\" | xargs git branch -D"},
 		{Title: "Fork & Clone void-packages", Command: fmt.Sprintf("git clone --depth 1 https://github.com/void-linux/void-packages.git %s", repoDir)},
-		{Title: "Set Upstream & Branch", Command: fmt.Sprintf("cd %s && git remote add upstream https://github.com/void-linux/void-packages.git && git fetch upstream master --depth 1 && git checkout -b %s-update", repoDir, p)},
+		{Title: "Set Upstream", Command: fmt.Sprintf("cd %s && git remote add upstream https://github.com/void-linux/void-packages.git", repoDir)},
+		{Title: "Fetch & Create Branch", Command: fmt.Sprintf("cd %s && git fetch upstream master --depth 1 && git checkout -b %s-update", repoDir, p)},
 		{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", repoDir)},
-		{Title: "Check for Updates", Command: fmt.Sprintf("cd %s && ./xbps-src update-check %s", repoDir, p)},
 		{Title: "Modify Template", Command: fmt.Sprintf("nano %s", filepath.Join(repoDir, "srcpkgs", p, "template"))},
 		{Title: "Generate Checksum", Command: fmt.Sprintf("cd %s && xgensum -f -i %s", repoDir, p)},
 		{Title: "Build (Native x86_64)", Command: fmt.Sprintf("cd %s && ./xbps-src pkg %s", repoDir, p)},
@@ -129,43 +140,60 @@ func initialModel(pkgName string) model {
 		pkgName:        p,
 		config:         cfg,
 		currentVersion: detectedVersion,
+		updateStatus:   "Checking...",
 		steps:          steps,
 	}
 }
 
+// Automatically check for updates on startup in the background
+func checkUpdatesCmd(cfg Config, pkgName string) tea.Cmd {
+	return func() tea.Msg {
+		repoDir := cfg.VoidPackagesPath
+		if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+			return updateCheckFinishedMsg{output: "", err: fmt.Errorf("repo not cloned")}
+		}
+		cmdStr := fmt.Sprintf("PYTHONUNBUFFERED=1 cd %s && ./xbps-src update-check %s", repoDir, pkgName)
+		cmd := exec.Command("bash", "-c", cmdStr)
+		outBytes, err := cmd.CombinedOutput()
+		return updateCheckFinishedMsg{output: string(outBytes), err: err}
+	}
+}
+
 func (m model) Init() tea.Cmd {
-	return nil
+	return checkUpdatesCmd(m.config, m.pkgName)
 }
 
 // Background worker that executes command and pushes lines into buffered channel
 func runCommandAndStream(command string, ch chan tea.Msg) {
-	cmd := exec.Command("bash", "-c", command)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		ch <- execFinishedMsg{err: err}
-		close(ch)
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		ch <- execFinishedMsg{err: err}
-		close(ch)
-		return
-	}
+	fullCmd := "PYTHONUNBUFFERED=1 " + command
+	cmd := exec.Command("bash", "-c", fullCmd)
+
+	r, w := io.Pipe()
+	cmd.Stdout = w
+	cmd.Stderr = w
 
 	if err := cmd.Start(); err != nil {
+		w.Close()
 		ch <- execFinishedMsg{err: err}
 		close(ch)
 		return
 	}
 
-	scanner := bufio.NewScanner(io.MultiReader(stdout, stderr))
+	go func() {
+		err := cmd.Wait()
+		w.Close()
+		ch <- execFinishedMsg{err: err}
+	}()
+
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		ch <- outputLineMsg(scanner.Text() + "\n")
 	}
 
-	err = cmd.Wait()
-	ch <- execFinishedMsg{err: err}
+	if scanErr := scanner.Err(); scanErr != nil {
+		ch <- outputLineMsg(fmt.Sprintf("[Scanner Error: %v]\n", scanErr))
+	}
+
 	close(ch)
 }
 
@@ -182,6 +210,16 @@ func waitForData(ch chan tea.Msg) tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case updateCheckFinishedMsg:
+		out := strings.TrimSpace(msg.output)
+		if msg.err != nil || out == "" {
+			m.updateStatus = "Up to date"
+		} else {
+			lines := strings.Split(out, "\n")
+			m.updateStatus = strings.TrimSpace(lines[len(lines)-1])
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.running {
 			return m, nil
@@ -204,7 +242,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.running = true
 			m.outputLog = ""
 			m.message = "Running..."
-			m.activeChan = make(chan tea.Msg, 256) // Buffered channel to prevent blocking
+			m.activeChan = make(chan tea.Msg, 256)
 			go runCommandAndStream(m.steps[m.cursor].Command, m.activeChan)
 			return m, waitForData(m.activeChan)
 		}
@@ -215,7 +253,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(lines) > 12 {
 			m.outputLog = strings.Join(lines[len(lines)-12:], "\n")
 		}
-		// Recursively wait for the next output line or completion message
 		return m, waitForData(m.activeChan)
 
 	case execFinishedMsg:
@@ -238,8 +275,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var sb strings.Builder
 
-	header := fmt.Sprintf(" Void Linux Package Update Wizard: [%s] (Version: %s)\n", m.pkgName, m.currentVersion)
-	sb.WriteString(titleStyle.Render(header))
+	titleLine := fmt.Sprintf(" Void Linux Package Update Wizard: [%s]", m.pkgName)
+	sb.WriteString(titleStyle.Render(titleLine))
+	sb.WriteString("\n")
+
+	versionDisplay := m.currentVersion
+	if m.updateStatus != "" && m.updateStatus != "Checking..." {
+		versionDisplay = fmt.Sprintf("%s (%s)", m.currentVersion, m.updateStatus)
+	}
+	versionLine := fmt.Sprintf(" Version: %s\n", versionDisplay)
+	sb.WriteString(versionStyle.Render(versionLine))
 	sb.WriteString("\n")
 
 	for i, step := range m.steps {
