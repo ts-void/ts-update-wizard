@@ -7,11 +7,11 @@ A simple terminal UI (TUI) written in Go to guide you step-by-step through contr
 - **Interactive Checklist:** Track your progress step-by-step from cloning to opening a PR.
 - **Context-Aware Commands:** Automatically formats commands with your specified package name.
 - **Keyboard Navigation:** Quick and lightweight navigation using standard keybindings.
+- **Run command:** Run command with shortcut `r` instead of just giving the command to copy.
+- **Read existing template:** Read the existing template file and get information like: repo, current version, ...
 
 ## Roadmap
 
-- **Run command:** Run command with shortcut `r` instead of just giving the command to copy.
-- **Read existing template:** Read the existing template file and get information like: repo, current version, ...
 - **Find better name:** Find a better name. _void-package-update-helper_ is to bad and too long.
 
 ## Requirements
