@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,19 +31,24 @@ type model struct {
 	currentVersion string
 	steps          []Step
 	cursor         int
+	outputLog      string
+	running        bool
 	message        string
+	activeChan     chan tea.Msg
 }
 
 var (
-	titleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
-	doneStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Strikethrough(true)
-	normalStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
-	msgStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	boxStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).BorderForeground(lipgloss.Color("63"))
+	titleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	cursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
+	doneStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Strikethrough(true)
+	normalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	helpStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
+	boxStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 2).BorderForeground(lipgloss.Color("63"))
+	outputBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 2).BorderForeground(lipgloss.Color("39"))
+	statusBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 2).BorderForeground(lipgloss.Color("214"))
 )
 
+type outputLineMsg string
 type execFinishedMsg struct {
 	err error
 }
@@ -85,10 +91,6 @@ func parseTemplateVersion(cfg Config, pkgName string) string {
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		// Handle scanner error if necessary
-	}
-
 	return "unknown"
 }
 
@@ -103,15 +105,14 @@ func initialModel(pkgName string) model {
 	repoDir := cfg.VoidPackagesPath
 
 	steps := []Step{
+		{Title: "Clean local branches", Command: "git branch | grep -v \"^\\*\" | xargs git branch -D"},
 		{Title: "Fork & Clone void-packages", Command: fmt.Sprintf("git clone --depth 1 https://github.com/void-linux/void-packages.git %s", repoDir)},
-		{Title: "Set Upstream", Command: fmt.Sprintf("cd %s && git remote add upstream https://github.com/void-linux/void-packages.git && git fetch upstream master --depth 1 && git checkout -b %s-update", repoDir, p)},
-		{Title: "Clean Local Branches", Command: fmt.Sprintf("cd %s && git branch | grep -v \"^\\*\" | xargs git branch -D", repoDir)},
-		{Title: "Create Branch", Command: fmt.Sprintf("cd %s && git checkout -b %s-update", repoDir, p)},
+		{Title: "Set Upstream & Branch", Command: fmt.Sprintf("cd %s && git remote add upstream https://github.com/void-linux/void-packages.git && git fetch upstream master --depth 1 && git checkout -b %s-update", repoDir, p)},
 		{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", repoDir)},
 		{Title: "Check for Updates", Command: fmt.Sprintf("cd %s && ./xbps-src update-check %s", repoDir, p)},
 		{Title: "Modify Template", Command: fmt.Sprintf("nano %s", filepath.Join(repoDir, "srcpkgs", p, "template"))},
 		{Title: "Generate Checksum", Command: fmt.Sprintf("cd %s && xgensum -f -i %s", repoDir, p)},
-		{Title: "Build and Test", Command: fmt.Sprintf("cd %s && ./xbps-src pkg %s && ./xbps-src -Q pkg %s", repoDir, p, p)},
+		{Title: "Build (Native x86_64)", Command: fmt.Sprintf("cd %s && ./xbps-src pkg %s", repoDir, p)},
 		{Title: "Build (aarch64)", Command: fmt.Sprintf("cd %s && ./xbps-src -a aarch64 pkg %s", repoDir, p)},
 		{Title: "Build (aarch64-musl)", Command: fmt.Sprintf("cd %s && ./xbps-src -a aarch64-musl pkg %s", repoDir, p)},
 		{Title: "Build (armv7l)", Command: fmt.Sprintf("cd %s && ./xbps-src -a armv7l pkg %s", repoDir, p)},
@@ -136,16 +137,55 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
-func runCommand(command string) tea.Cmd {
-	c := exec.Command("bash", "-c", command)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return execFinishedMsg{err: err}
-	})
+// Background worker that executes command and pushes lines into buffered channel
+func runCommandAndStream(command string, ch chan tea.Msg) {
+	cmd := exec.Command("bash", "-c", command)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		ch <- execFinishedMsg{err: err}
+		close(ch)
+		return
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		ch <- execFinishedMsg{err: err}
+		close(ch)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		ch <- execFinishedMsg{err: err}
+		close(ch)
+		return
+	}
+
+	scanner := bufio.NewScanner(io.MultiReader(stdout, stderr))
+	for scanner.Scan() {
+		ch <- outputLineMsg(scanner.Text() + "\n")
+	}
+
+	err = cmd.Wait()
+	ch <- execFinishedMsg{err: err}
+	close(ch)
+}
+
+// Continuously polls the channel for new lines without blocking the TUI event loop
+func waitForData(ch chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.running {
+			return m, nil
+		}
 		m.message = ""
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -161,21 +201,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ", "enter":
 			m.steps[m.cursor].Done = !m.steps[m.cursor].Done
 		case "r":
-			cmdStr := m.steps[m.cursor].Command
-			return m, runCommand(cmdStr)
+			m.running = true
+			m.outputLog = ""
+			m.message = "Running..."
+			m.activeChan = make(chan tea.Msg, 256) // Buffered channel to prevent blocking
+			go runCommandAndStream(m.steps[m.cursor].Command, m.activeChan)
+			return m, waitForData(m.activeChan)
 		}
 
+	case outputLineMsg:
+		m.outputLog += string(msg)
+		lines := strings.Split(m.outputLog, "\n")
+		if len(lines) > 12 {
+			m.outputLog = strings.Join(lines[len(lines)-12:], "\n")
+		}
+		// Recursively wait for the next output line or completion message
+		return m, waitForData(m.activeChan)
+
 	case execFinishedMsg:
+		m.running = false
 		if msg.err != nil {
-			m.message = fmt.Sprintf("Error: %v", msg.err)
+			m.message = fmt.Sprintf("Execution Error: %v", msg.err)
 		} else {
-			m.message = "Successfully executed!"
+			m.message = "Command executed successfully!"
 			m.steps[m.cursor].Done = true
 
-			if m.cursor == 0 || m.cursor == 4 {
+			if m.cursor == 1 || m.cursor == 5 {
 				m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
 			}
 		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -209,13 +264,22 @@ func (m model) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(boxStyle.Render(fmt.Sprintf("Command for current step:\n\n%s", m.steps[m.cursor].Command)))
+	sb.WriteString(boxStyle.Render(fmt.Sprintf("Command: %s", m.steps[m.cursor].Command)))
 	sb.WriteString("\n\n")
 
-	if m.message != "" {
-		sb.WriteString(msgStyle.Render(m.message))
-		sb.WriteString("\n")
+	logDisplay := m.outputLog
+	if logDisplay == "" {
+		logDisplay = "(No output yet / ready)"
 	}
+	sb.WriteString(outputBoxStyle.Render(fmt.Sprintf("Live Output:\n%s", logDisplay)))
+	sb.WriteString("\n\n")
+
+	statusText := m.message
+	if statusText == "" {
+		statusText = "Status: Ready"
+	}
+	sb.WriteString(statusBoxStyle.Render(statusText))
+	sb.WriteString("\n\n")
 
 	sb.WriteString(helpStyle.Render("[↑/↓] Navigate  [Space/Enter] Toggle  [r] Run  [q] Quit"))
 
@@ -228,7 +292,7 @@ func main() {
 		pkg = os.Args[1]
 	}
 
-	p := tea.NewProgram(initialModel(pkg))
+	p := tea.NewProgram(initialModel(pkg), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
