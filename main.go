@@ -20,6 +20,7 @@ type Step struct {
 	Done    bool   `json:"-"`
 }
 
+// Config structure for config.json (including embedded tasks)
 type Config struct {
 	VoidPackagesPath string `json:"void_packages_path"`
 	Tasks            []Step `json:"tasks"`
@@ -36,6 +37,8 @@ type model struct {
 	running        bool
 	message        string
 	activeChan     chan tea.Msg
+	width          int
+	height         int
 }
 
 var (
@@ -140,6 +143,7 @@ func initialModel(pkgName string) model {
 		currentVersion: detectedVersion,
 		updateStatus:   "Checking...",
 		steps:          cfg.Tasks,
+		width:          80, // Default fallback width
 	}
 }
 
@@ -208,6 +212,11 @@ func waitForData(ch chan tea.Msg) tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case updateCheckFinishedMsg:
 		out := strings.TrimSpace(msg.output)
 		if msg.err != nil || out == "" {
@@ -272,6 +281,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var sb strings.Builder
 
+	// Calculate a safe box width based on terminal size (at least 40 columns)
+	boxWidth := m.width - 4
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
 	titleLine := fmt.Sprintf(" Void Linux Package Update Wizard: [%s]", m.pkgName)
 	sb.WriteString(titleStyle.Render(titleLine))
 	sb.WriteString("\n")
@@ -306,21 +321,26 @@ func (m model) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(boxStyle.Render(fmt.Sprintf("Command: %s", m.steps[m.cursor].Command)))
+
+	// Apply dynamic width for text wrapping inside the command and output boxes
+	styledCmdBox := boxStyle.Width(boxWidth).Render(fmt.Sprintf("Command: %s", m.steps[m.cursor].Command))
+	sb.WriteString(styledCmdBox)
 	sb.WriteString("\n\n")
 
 	logDisplay := m.outputLog
 	if logDisplay == "" {
 		logDisplay = "(No output yet / ready)"
 	}
-	sb.WriteString(outputBoxStyle.Render(fmt.Sprintf("Live Output:\n%s", logDisplay)))
+	styledOutputBox := outputBoxStyle.Width(boxWidth).Render(fmt.Sprintf("Live Output:\n%s", logDisplay))
+	sb.WriteString(styledOutputBox)
 	sb.WriteString("\n\n")
 
 	statusText := m.message
 	if statusText == "" {
 		statusText = "Status: Ready"
 	}
-	sb.WriteString(statusBoxStyle.Render(statusText))
+	styledStatusBox := statusBoxStyle.Width(boxWidth).Render(statusText)
+	sb.WriteString(styledStatusBox)
 	sb.WriteString("\n\n")
 
 	sb.WriteString(helpStyle.Render("[↑/↓] Navigate  [Space/Enter] Toggle  [r] Run  [q] Quit"))
