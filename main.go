@@ -20,9 +20,11 @@ type Step struct {
 	Done    bool   `json:"-"`
 }
 
-// Config structure for config.json (including embedded tasks)
+// Config structure for config.json (including git_username, editor and tasks)
 type Config struct {
 	VoidPackagesPath string `json:"void_packages_path"`
+	GitUsername      string `json:"git_username"`
+	Editor           string `json:"editor"`
 	Tasks            []Step `json:"tasks"`
 }
 
@@ -69,6 +71,8 @@ func loadConfig(pkgName string) Config {
 	if err != nil {
 		return Config{
 			VoidPackagesPath: defaultPath,
+			GitUsername:      "your-username",
+			Editor:           "nano",
 			Tasks: []Step{
 				{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", defaultPath)},
 			},
@@ -81,6 +85,18 @@ func loadConfig(pkgName string) Config {
 	if err := decoder.Decode(&cfg); err != nil || cfg.VoidPackagesPath == "" {
 		cfg.VoidPackagesPath = defaultPath
 	}
+	if cfg.GitUsername == "" {
+		cfg.GitUsername = "your-username"
+	}
+
+	// Determine editor: config.json -> $EDITOR -> fallback (nano)
+	editor := cfg.Editor
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "nano"
+		}
+	}
 
 	// Fallback if no tasks defined in json
 	if len(cfg.Tasks) == 0 {
@@ -89,11 +105,13 @@ func loadConfig(pkgName string) Config {
 		}
 	}
 
-	// Replace placeholders ({{repo}} and {{pkg}}) in all tasks
+	// Replace placeholders ({{repo}}, {{pkg}}, {{git_username}}, and {{editor}}) in all tasks
 	for i := range cfg.Tasks {
 		cmd := cfg.Tasks[i].Command
 		cmd = strings.ReplaceAll(cmd, "{{repo}}", cfg.VoidPackagesPath)
 		cmd = strings.ReplaceAll(cmd, "{{pkg}}", pkgName)
+		cmd = strings.ReplaceAll(cmd, "{{git_username}}", cfg.GitUsername)
+		cmd = strings.ReplaceAll(cmd, "{{editor}}", editor)
 		cfg.Tasks[i].Command = cmd
 	}
 
@@ -143,7 +161,7 @@ func initialModel(pkgName string) model {
 		currentVersion: detectedVersion,
 		updateStatus:   "Checking...",
 		steps:          cfg.Tasks,
-		width:          80, // Default fallback width
+		width:          80,
 	}
 }
 
@@ -154,8 +172,9 @@ func checkUpdatesCmd(cfg Config, pkgName string) tea.Cmd {
 		if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 			return updateCheckFinishedMsg{output: "", err: fmt.Errorf("repo not cloned")}
 		}
-		cmdStr := fmt.Sprintf("PYTHONUNBUFFERED=1 cd %s && ./xbps-src update-check %s", repoDir, pkgName)
+		cmdStr := fmt.Sprintf("cd %s && ./xbps-src update-check %s", repoDir, pkgName)
 		cmd := exec.Command("bash", "-c", cmdStr)
+		cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 		outBytes, err := cmd.CombinedOutput()
 		return updateCheckFinishedMsg{output: string(outBytes), err: err}
 	}
@@ -167,8 +186,8 @@ func (m model) Init() tea.Cmd {
 
 // Background worker that executes command and pushes lines into buffered channel
 func runCommandAndStream(command string, ch chan tea.Msg) {
-	fullCmd := "PYTHONUNBUFFERED=1 " + command
-	cmd := exec.Command("bash", "-c", fullCmd)
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	r, w := io.Pipe()
 	cmd.Stdout = w
@@ -246,12 +265,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ", "enter":
 			m.steps[m.cursor].Done = !m.steps[m.cursor].Done
 		case "r":
-			m.running = true
-			m.outputLog = ""
-			m.message = "Running..."
-			m.activeChan = make(chan tea.Msg, 256)
-			go runCommandAndStream(m.steps[m.cursor].Command, m.activeChan)
-			return m, waitForData(m.activeChan)
+			cmdStr := m.steps[m.cursor].Command
+			// Check if the command launches an interactive text editor
+			isEditor := strings.Contains(cmdStr, "nano") || strings.Contains(cmdStr, "hx") ||
+				strings.Contains(cmdStr, "vim") || strings.Contains(cmdStr, "vi") ||
+				strings.Contains(cmdStr, "micro") || strings.Contains(cmdStr, "emacs")
+
+			if isEditor {
+				// Hand over terminal control to the editor cleanly using tea.ExecProcess
+				c := exec.Command("bash", "-c", cmdStr)
+				return m, tea.ExecProcess(c, func(err error) tea.Msg {
+					return execFinishedMsg{err: err}
+				})
+			} else {
+				// Run non-interactive commands in background with live log stream
+				m.running = true
+				m.outputLog = ""
+				m.message = "Running..."
+				m.activeChan = make(chan tea.Msg, 256)
+				go runCommandAndStream(cmdStr, m.activeChan)
+				return m, waitForData(m.activeChan)
+			}
 		}
 
 	case outputLineMsg:
@@ -270,7 +304,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Command executed successfully!"
 			m.steps[m.cursor].Done = true
 
-			// Dynamically refresh version
+			// Dynamically refresh version after editing template
 			m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
 		}
 		return m, nil
@@ -281,7 +315,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var sb strings.Builder
 
-	// Calculate a safe box width based on terminal size (at least 40 columns)
 	boxWidth := m.width - 4
 	if boxWidth < 40 {
 		boxWidth = 40
@@ -322,7 +355,6 @@ func (m model) View() string {
 
 	sb.WriteString("\n")
 
-	// Apply dynamic width for text wrapping inside the command and output boxes
 	styledCmdBox := boxStyle.Width(boxWidth).Render(fmt.Sprintf("Command: %s", m.steps[m.cursor].Command))
 	sb.WriteString(styledCmdBox)
 	sb.WriteString("\n\n")
