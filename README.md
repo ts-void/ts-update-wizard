@@ -12,6 +12,9 @@ A simple terminal UI (TUI) written in Go to guide you step-by-step through contr
 
 ## Roadmap
 
+- **Improve Error Messages:** Currently some errors are misleading or inaccurate.
+- **Check tasks done:** Some tasks like `clone` or `set upstream` are already done for another package. Check it on program start and mark the task in the list as done.
+- **Variable task declaration:** Move task declaration to toml, yaml or json file. Add, remove, rename tasks without recompiling. 
 - **Find better name:** Find a better name. _void-package-update-helper_ is to bad and too long.
 
 ## Requirements
