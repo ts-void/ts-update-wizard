@@ -14,15 +14,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Config structure for config.json
-type Config struct {
-	VoidPackagesPath string `json:"void_packages_path"`
+type Step struct {
+	Title   string `json:"title"`
+	Command string `json:"command"`
+	Done    bool   `json:"-"`
 }
 
-type Step struct {
-	Title   string
-	Command string
-	Done    bool
+type Config struct {
+	VoidPackagesPath string `json:"void_packages_path"`
+	Tasks            []Step `json:"tasks"`
 }
 
 type model struct {
@@ -59,12 +59,17 @@ type execFinishedMsg struct {
 	err error
 }
 
-// Load config file or fall back to default value
-func loadConfig() Config {
+// Load config file and parse tasks with variable substitution
+func loadConfig(pkgName string) Config {
 	defaultPath := "./void-packages"
 	file, err := os.Open("config.json")
 	if err != nil {
-		return Config{VoidPackagesPath: defaultPath}
+		return Config{
+			VoidPackagesPath: defaultPath,
+			Tasks: []Step{
+				{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", defaultPath)},
+			},
+		}
 	}
 	defer file.Close()
 
@@ -73,6 +78,22 @@ func loadConfig() Config {
 	if err := decoder.Decode(&cfg); err != nil || cfg.VoidPackagesPath == "" {
 		cfg.VoidPackagesPath = defaultPath
 	}
+
+	// Fallback if no tasks defined in json
+	if len(cfg.Tasks) == 0 {
+		cfg.Tasks = []Step{
+			{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", cfg.VoidPackagesPath)},
+		}
+	}
+
+	// Replace placeholders ({{repo}} and {{pkg}}) in all tasks
+	for i := range cfg.Tasks {
+		cmd := cfg.Tasks[i].Command
+		cmd = strings.ReplaceAll(cmd, "{{repo}}", cfg.VoidPackagesPath)
+		cmd = strings.ReplaceAll(cmd, "{{pkg}}", pkgName)
+		cfg.Tasks[i].Command = cmd
+	}
+
 	return cfg
 }
 
@@ -97,8 +118,7 @@ func parseTemplateVersion(cfg Config, pkgName string) string {
 		}
 	}
 
-	// Check for scanner errors to satisfy linters
-	if err := scanner.Err(); err != nil {
+	if scanErr := scanner.Err(); scanErr != nil {
 		return "unknown"
 	}
 
@@ -111,37 +131,15 @@ func initialModel(pkgName string) model {
 		p = "<pkgname>"
 	}
 
-	cfg := loadConfig()
+	cfg := loadConfig(p)
 	detectedVersion := parseTemplateVersion(cfg, p)
-	repoDir := cfg.VoidPackagesPath
-
-	steps := []Step{
-		{Title: "Clean local branches", Command: "git branch | grep -v \"^\\*\" | xargs git branch -D"},
-		{Title: "Fork & Clone void-packages", Command: fmt.Sprintf("git clone --depth 1 https://github.com/void-linux/void-packages.git %s", repoDir)},
-		{Title: "Set Upstream", Command: fmt.Sprintf("cd %s && git remote add upstream https://github.com/void-linux/void-packages.git", repoDir)},
-		{Title: "Fetch & Create Branch", Command: fmt.Sprintf("cd %s && git fetch upstream master --depth 1 && git checkout -b %s-update", repoDir, p)},
-		{Title: "Binary Bootstrap", Command: fmt.Sprintf("cd %s && ./xbps-src binary-bootstrap", repoDir)},
-		{Title: "Modify Template", Command: fmt.Sprintf("nano %s", filepath.Join(repoDir, "srcpkgs", p, "template"))},
-		{Title: "Generate Checksum", Command: fmt.Sprintf("cd %s && xgensum -f -i %s", repoDir, p)},
-		{Title: "Build (Native x86_64)", Command: fmt.Sprintf("cd %s && ./xbps-src pkg %s", repoDir, p)},
-		{Title: "Build (aarch64)", Command: fmt.Sprintf("cd %s && ./xbps-src -a aarch64 pkg %s", repoDir, p)},
-		{Title: "Build (aarch64-musl)", Command: fmt.Sprintf("cd %s && ./xbps-src -a aarch64-musl pkg %s", repoDir, p)},
-		{Title: "Build (armv7l)", Command: fmt.Sprintf("cd %s && ./xbps-src -a armv7l pkg %s", repoDir, p)},
-		{Title: "Build (armv6l)", Command: fmt.Sprintf("cd %s && ./xbps-src -a armv6l pkg %s", repoDir, p)},
-		{Title: "Build (i686)", Command: fmt.Sprintf("cd %s && ./xbps-src -a i686 pkg %s", repoDir, p)},
-		{Title: "Build (riscv64)", Command: fmt.Sprintf("cd %s && ./xbps-src -a riscv64 pkg %s", repoDir, p)},
-		{Title: "Install & Test on System", Command: fmt.Sprintf("cd %s && xi -S %s", repoDir, p)},
-		{Title: "Lint Package", Command: fmt.Sprintf("cd %s && xlint %s", repoDir, p)},
-		{Title: "Commit (xbump)", Command: fmt.Sprintf("cd %s && xbump %s", repoDir, p)},
-		{Title: "Push Branch", Command: fmt.Sprintf("cd %s && git push -u origin %s-update", repoDir, p)},
-	}
 
 	return model{
 		pkgName:        p,
 		config:         cfg,
 		currentVersion: detectedVersion,
 		updateStatus:   "Checking...",
-		steps:          steps,
+		steps:          cfg.Tasks,
 	}
 }
 
@@ -263,9 +261,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Command executed successfully!"
 			m.steps[m.cursor].Done = true
 
-			if m.cursor == 1 || m.cursor == 5 {
-				m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
-			}
+			// Dynamically refresh version
+			m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
 		}
 		return m, nil
 	}
