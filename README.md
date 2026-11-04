@@ -9,12 +9,10 @@ A simple terminal UI (TUI) written in Go to guide you step-by-step through contr
 - **Keyboard Navigation:** Quick and lightweight navigation using standard keybindings.
 - **Run command:** Run command with shortcut `r` instead of just giving the command to copy.
 - **Read existing template:** Read the existing template file and get information like: repo, current version, ...
+- **Variable task declaration:** Tasks, text editor can be configured in config.json.
 
 ## Roadmap
 
-- **Improve Error Messages:** Currently some errors are misleading or inaccurate.
-- **Check tasks done:** Some tasks like `clone` or `set upstream` are already done for another package. Check it on program start and mark the task in the list as done.
-- **Variable task declaration:** Move task declaration to toml, yaml or json file. Add, remove, rename tasks without recompiling. 
 - **Find better name:** Find a better name. _void-package-update-helper_ is to bad and too long.
 
 ## Requirements
