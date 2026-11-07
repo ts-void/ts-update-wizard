@@ -1,23 +1,75 @@
 {
-  "void_packages_path": "<path>",
+  "void_packages_path": "path to Void/void-packages",
+  "git_username": "github user",
+  "editor": "your editor",
   "tasks": [
-    { "title": "Clean local branches", "command": "git branch | grep -v \"^\\*\" | xargs git branch -D" },
-    { "title": "Fork & Clone void-packages", "command": "git clone --depth 1 https://github.com/void-linux/void-packages.git {{repo}}" },
-    { "title": "Set Upstream", "command": "cd {{repo}} && git remote add upstream https://github.com/void-linux/void-packages.git" },
-    { "title": "Fetch & Create Branch", "command": "cd {{repo}} && git fetch upstream master --depth 1 && git checkout -b {{pkg}}-update" },
-    { "title": "Binary Bootstrap", "command": "cd {{repo}} && ./xbps-src binary-bootstrap" },
-    { "title": "Modify Template", "command": "nano {{repo}}/srcpkgs/{{pkg}}/template" },
-    { "title": "Generate Checksum", "command": "cd {{repo}} && xgensum -f -i {{pkg}}" },
-    { "title": "Build (Native x86_64)", "command": "cd {{repo}} && ./xbps-src pkg {{pkg}}" },
-    { "title": "Build (aarch64)", "command": "cd {{repo}} && ./xbps-src -a aarch64 pkg {{pkg}}" },
-    { "title": "Build (aarch64-musl)", "command": "cd {{repo}} && ./xbps-src -a aarch64-musl pkg {{pkg}}" },
-    { "title": "Build (armv7l)", "command": "cd {{repo}} && ./xbps-src -a armv7l pkg {{pkg}}" },
-    { "title": "Build (armv6l)", "command": "cd {{repo}} && ./xbps-src -a armv6l pkg {{pkg}}" },
-    { "title": "Build (i686)", "command": "cd {{repo}} && ./xbps-src -a i686 pkg {{pkg}}" },
-    { "title": "Build (riscv64)", "command": "cd {{repo}} && ./xbps-src -a riscv64 pkg {{pkg}}" },
-    { "title": "Install & Test on System", "command": "cd {{repo}} && xi -S {{pkg}}" },
-    { "title": "Lint Package", "command": "cd {{repo}} && xlint {{pkg}}" },
-    { "title": "Commit (xbump)", "command": "cd {{repo}} && xbump {{pkg}}" },
-    { "title": "Push Branch", "command": "cd {{repo}} && git push -u origin {{pkg}}-update" }
+    {
+      "title": "Clean local branches",
+      "command": "git branch | grep -v \"^\\*\" | xargs -r git branch -D || true"
+    },
+    {
+      "title": "Fork & Clone void-packages",
+      "command": "if [ ! -d {{repo}} ]; then git clone --depth 1 https://github.com/{{git_username}}/void-packages.git {{repo}}; else echo 'Repo already cloned, skipping.'; fi"
+    },
+    {
+      "title": "Set Upstream",
+      "command": "cd {{repo}} && (git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/void-linux/void-packages.git)"
+    },
+    {
+      "title": "Fetch & Create Branch",
+      "command": "cd {{repo}} && git fetch upstream master --depth 1 && git checkout --no-track -B {{pkg}}-update FETCH_HEAD"
+    },
+    {
+      "title": "Binary Bootstrap",
+      "command": "cd {{repo}} && ./xbps-src binary-bootstrap"
+    },
+    {
+      "title": "Modify Template",
+      "command": "{{editor}} {{repo}}/srcpkgs/{{pkg}}/template"
+    },
+    {
+      "title": "Generate Checksum",
+      "command": "cd {{repo}} && xgensum -f -i {{pkg}}"
+    },
+    {
+      "title": "Build (Native x86_64)",
+      "command": "cd {{repo}} && ./xbps-src -Q pkg {{pkg}}"
+    },
+    {
+      "title": "Build (aarch64)",
+      "command": "cd {{repo}} && ./xbps-src -a aarch64 pkg {{pkg}}"
+    },
+    {
+      "title": "Build (aarch64-musl)",
+      "command": "cd {{repo}} && ./xbps-src -a aarch64-musl pkg {{pkg}}"
+    },
+    {
+      "title": "Build (armv7l)",
+      "command": "cd {{repo}} && ./xbps-src -a armv7l pkg {{pkg}}"
+    },
+    {
+      "title": "Build (armv6l)",
+      "command": "cd {{repo}} && ./xbps-src -a armv6l pkg {{pkg}}"
+    },
+    {
+      "title": "Build (i686)",
+      "command": "cd {{repo}} && ./xbps-src -a i686 pkg {{pkg}}"
+    },
+    {
+      "title": "Install & Test on System",
+      "command": "cd {{repo}} && xi -Sy {{pkg}}"
+    },
+    {
+      "title": "Lint Package",
+      "command": "cd {{repo}} && xlint {{pkg}}"
+    },
+    {
+      "title": "Commit (xbump)",
+      "command": "cd {{repo}} && xbump {{pkg}}"
+    },
+    {
+      "title": "Push Branch",
+      "command": "cd {{repo}} && git push --force-with-lease -u origin {{pkg}}-update"
+    }
   ]
 }
