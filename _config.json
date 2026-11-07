@@ -70,6 +70,10 @@
     {
       "title": "Push Branch",
       "command": "cd {{repo}} && git push --force-with-lease -u origin {{pkg}}-update"
+    },
+    {
+      "title": "Force Reinstall Package from Remote",
+      "command": "cd {{repo}} && sudo xbps-install -Suf {{pkg}}"
     }
   ]
 }
