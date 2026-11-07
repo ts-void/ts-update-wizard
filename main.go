@@ -271,7 +271,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			isInteractive := strings.Contains(cmdStr, "nano") || strings.Contains(cmdStr, "hx") ||
 				strings.Contains(cmdStr, "vim") || strings.Contains(cmdStr, "vi") ||
 				strings.Contains(cmdStr, "micro") || strings.Contains(cmdStr, "emacs") ||
-				strings.Contains(cmdStr, "xi ") || strings.Contains(cmdStr, "sudo")
+				strings.Contains(cmdStr, "xi ") || strings.Contains(cmdStr, "sudo") ||
+				strings.Contains(cmdStr, "xbps-install ") || strings.Contains(cmdStr, "sudo")
 
 			if isInteractive {
 				// Terminal-Kontrolle kurz abgeben, damit sudo/xi Passwörter sauber abfragen kann
