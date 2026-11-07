@@ -266,19 +266,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.steps[m.cursor].Done = !m.steps[m.cursor].Done
 		case "r":
 			cmdStr := m.steps[m.cursor].Command
-			// Check if the command launches an interactive text editor
-			isEditor := strings.Contains(cmdStr, "nano") || strings.Contains(cmdStr, "hx") ||
-				strings.Contains(cmdStr, "vim") || strings.Contains(cmdStr, "vi") ||
-				strings.Contains(cmdStr, "micro") || strings.Contains(cmdStr, "emacs")
 
-			if isEditor {
-				// Hand over terminal control to the editor cleanly using tea.ExecProcess
+			// Prüfen, ob der Befehl interaktiv sein muss (Editor, xi-Installationen oder sudo)
+			isInteractive := strings.Contains(cmdStr, "nano") || strings.Contains(cmdStr, "hx") ||
+				strings.Contains(cmdStr, "vim") || strings.Contains(cmdStr, "vi") ||
+				strings.Contains(cmdStr, "micro") || strings.Contains(cmdStr, "emacs") ||
+				strings.Contains(cmdStr, "xi ") || strings.Contains(cmdStr, "sudo")
+
+			if isInteractive {
+				// Terminal-Kontrolle kurz abgeben, damit sudo/xi Passwörter sauber abfragen kann
 				c := exec.Command("bash", "-c", cmdStr)
 				return m, tea.ExecProcess(c, func(err error) tea.Msg {
 					return execFinishedMsg{err: err}
 				})
 			} else {
-				// Run non-interactive commands in background with live log stream
+				// Nicht-interaktive Befehle im Hintergrund mit Live-Log-Stream ausführen
 				m.running = true
 				m.outputLog = ""
 				m.message = "Running..."
@@ -304,7 +306,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Command executed successfully!"
 			m.steps[m.cursor].Done = true
 
-			// Dynamically refresh version after editing template
+			// Template-Version nach Änderungen automatisch aktualisieren
 			m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
 		}
 		return m, nil
