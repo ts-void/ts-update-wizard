@@ -5,7 +5,7 @@
   "tasks": [
     {
       "title": "Clean local branches",
-      "command": "git branch | grep -v \"^\\*\" | xargs -r git branch -D || true"
+      "command": "cd {{repo}} && git checkout master && git branch | grep -v \"^\\*\" | xargs -r git branch -D || true"
     },
     {
       "title": "Fork & Clone void-packages",
@@ -16,8 +16,16 @@
       "command": "cd {{repo}} && (git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/void-linux/void-packages.git)"
     },
     {
-      "title": "Fetch & Create Branch",
-      "command": "cd {{repo}} && git fetch upstream master --depth 1 && git checkout --no-track -B {{pkg}}-update FETCH_HEAD"
+      "title": "Fetch",
+      "command": "cd {{repo}} && git fetch upstream master --depth 1"
+    },
+    {
+      "title": "Pull",
+      "command": "cd {{repo}} && git pull"
+    },
+    {
+      "title": "Create Branch",
+      "command": "cd {{repo}} && git checkout --no-track -B {{pkg}}-update FETCH_HEAD"
     },
     {
       "title": "Binary Bootstrap",
@@ -72,8 +80,12 @@
       "command": "cd {{repo}} && git push --force-with-lease -u origin {{pkg}}-update"
     },
     {
+      "title": "PR Template",
+      "command": "printf '%s\\n' '#### Testing the changes' '- I tested the changes in this PR: **YES**' '' '#### Local build testing' '- I built this PR locally for my native architecture, x86_64' '- I built this PR locally for these architectures (if supported. mark crossbuilds):' '  - aarch64 (crossbuild)' '  - aarch64-musl (crossbuild)' '  - armv7l (crossbuild)' '  - armv6l (crossbuild)' '  - i686 (crossbuild)' | wl-copy && echo 'PR template copied to clipboard.'"
+    },
+    {
       "title": "Force Reinstall Package from Remote",
       "command": "cd {{repo}} && sudo xbps-install -Suf {{pkg}}"
     }
-  ]
+   ]
 }
