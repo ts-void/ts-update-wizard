@@ -28,6 +28,118 @@ type Config struct {
 	Tasks            []Step `json:"tasks"`
 }
 
+// Progress stores completed task titles for one package.
+type Progress struct {
+	Package   string          `json:"package"`
+	Completed map[string]bool `json:"completed"`
+}
+
+// progressDir returns the per-user configuration directory for progress files.
+func progressDir() (string, error) {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		var err error
+		base, err = os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(base, "void-package-wizard", "progress"), nil
+}
+
+// progressFile returns the progress filename for a package.
+// Restrict the name to a single path component to prevent path traversal.
+func progressFile(pkgName string) (string, error) {
+	clean := filepath.Base(filepath.Clean(pkgName))
+	if clean == "." || clean == string(filepath.Separator) || clean != pkgName {
+		return "", fmt.Errorf("invalid package name: %q", pkgName)
+	}
+	dir, err := progressDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, clean+".json"), nil
+}
+
+func loadProgress(pkgName string, steps []Step) error {
+	path, err := progressFile(pkgName)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var progress Progress
+	if err := json.Unmarshal(data, &progress); err != nil {
+		return fmt.Errorf("could not read progress for %s: %w", pkgName, err)
+	}
+	for i := range steps {
+		steps[i].Done = progress.Completed[steps[i].Title]
+	}
+	return nil
+}
+
+func saveProgress(pkgName string, steps []Step) error {
+	path, err := progressFile(pkgName)
+	if err != nil {
+		return err
+	}
+	completed := make(map[string]bool)
+	for _, step := range steps {
+		if step.Done {
+			completed[step.Title] = true
+		}
+	}
+
+	data, err := json.MarshalIndent(Progress{
+		Package: pkgName, Completed: completed,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	// Write atomically so an interrupted save cannot corrupt the progress file.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func clearPackageProgress(pkgName string) error {
+	path, err := progressFile(pkgName)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func clearAllProgress() error {
+	dir, err := progressDir()
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return nil
+}
+
 type model struct {
 	pkgName        string
 	config         Config
@@ -154,6 +266,7 @@ func initialModel(pkgName string) model {
 
 	cfg := loadConfig(p)
 	detectedVersion := parseTemplateVersion(cfg, p)
+	progressErr := loadProgress(p, cfg.Tasks)
 
 	return model{
 		pkgName:        p,
@@ -162,7 +275,15 @@ func initialModel(pkgName string) model {
 		updateStatus:   "Checking...",
 		steps:          cfg.Tasks,
 		width:          80,
+		message:        progressLoadMessage(progressErr),
 	}
+}
+
+func progressLoadMessage(err error) string {
+	if err != nil {
+		return fmt.Sprintf("Progress could not be loaded: %v", err)
+	}
+	return "Progress loaded"
 }
 
 // Automatically check for updates on startup in the background
@@ -264,6 +385,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case " ", "enter":
 			m.steps[m.cursor].Done = !m.steps[m.cursor].Done
+			if err := saveProgress(m.pkgName, m.steps); err != nil {
+				m.message = fmt.Sprintf("Could not save progress: %v", err)
+			} else {
+				m.message = "Progress saved"
+			}
+		case "c":
+			if err := clearPackageProgress(m.pkgName); err != nil {
+				m.message = fmt.Sprintf("Could not clear package progress: %v", err)
+			} else {
+				for i := range m.steps {
+					m.steps[i].Done = false
+				}
+				m.message = fmt.Sprintf("Progress for %s cleared", m.pkgName)
+			}
+		case "C":
+			if err := clearAllProgress(); err != nil {
+				m.message = fmt.Sprintf("Could not clear all progress: %v", err)
+			} else {
+				for i := range m.steps {
+					m.steps[i].Done = false
+				}
+				m.message = "All saved package progress cleared"
+			}
 		case "r":
 			cmdStr := m.steps[m.cursor].Command
 
@@ -306,6 +450,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = "Command executed successfully!"
 			m.steps[m.cursor].Done = true
+			if err := saveProgress(m.pkgName, m.steps); err != nil {
+				m.message = fmt.Sprintf("Command succeeded, but progress could not be saved: %v", err)
+			}
 
 			// Template-Version nach Änderungen automatisch aktualisieren
 			m.currentVersion = parseTemplateVersion(m.config, m.pkgName)
@@ -378,7 +525,7 @@ func (m model) View() string {
 	sb.WriteString(styledStatusBox)
 	sb.WriteString("\n\n")
 
-	sb.WriteString(helpStyle.Render("[↑/↓] Navigate  [Space/Enter] Toggle  [r] Run  [q] Quit"))
+	sb.WriteString(helpStyle.Render("[↑/↓] Navigate  [Space/Enter] Toggle  [r] Run  [c] Clear package  [C] Clear all  [q] Quit"))
 
 	return sb.String()
 }
