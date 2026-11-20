@@ -44,7 +44,7 @@ func progressDir() (string, error) {
 			return "", err
 		}
 	}
-	return filepath.Join(base, "void-package-wizard", "progress"), nil
+	return filepath.Join(base, "ts-update-wizard", "progress"), nil
 }
 
 // progressFile returns the progress filename for a package.
