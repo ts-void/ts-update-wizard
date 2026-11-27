@@ -1,4 +1,4 @@
-# void-package-update-helper
+# ts-update-wizard
 
 A simple terminal UI (TUI) written in Go to guide you step-by-step through contributing package updates to [void-packages](https://github.com/void-linux/void-packages).
 
