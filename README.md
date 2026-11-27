@@ -14,6 +14,7 @@ A simple terminal UI (TUI) written in Go to guide you step-by-step through contr
 ## Roadmap
 
 - **Find better name:** Find a better name. _void-package-update-helper_ is to bad and too long.
+- **Mark multiple tasks:** Mark multiple tasks to start them async/parallel. 
 
 ## Requirements
 

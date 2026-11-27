@@ -179,7 +179,15 @@ type execFinishedMsg struct {
 // Load config file and parse tasks with variable substitution
 func loadConfig(pkgName string) Config {
 	defaultPath := "./void-packages"
-	file, err := os.Open("config.json")
+	exe, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+
+	appDir := filepath.Dir(exe)
+	configPath := filepath.Join(appDir, "config.json")
+
+	file, err := os.Open(configPath)
 	if err != nil {
 		return Config{
 			VoidPackagesPath: defaultPath,
